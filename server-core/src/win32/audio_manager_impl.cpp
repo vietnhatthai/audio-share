@@ -55,15 +55,6 @@ audio_manager_impl::~audio_manager_impl()
 
 } // namespace detail
 
-void exit_on_failed(HRESULT hr, const std::string& message = "") {
-    if (FAILED(hr)) {
-        _com_error err(hr);
-        std::string full_message = message.empty() ? "" : message + ": ";
-        spdlog::error("{}{}", full_message, err.ErrorMessage());
-        exit(1);
-    }
-}
-
 void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> network_manager, const std::string& endpoint_id)
 {
     spdlog::info("endpoint_id: {}", endpoint_id);

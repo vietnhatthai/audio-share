@@ -31,28 +31,3 @@ jobs:
           path: |
             server-mfc/x64/Release/*.exe
             server-mfc/x64/Release/*.sha256
-
-  create_release:
-    name: Create Release
-    needs: [build_server_mfc]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v3
-      - run: git pull
-      - run: chmod +x ./scripts/get_version.sh
-      - uses: actions/download-artifact@v4.1.7
-        with:
-          path: release_bin
-      - name: Generate release notes
-        run: 'echo -e "$(cat ./metadata/en-US/changelogs/$(bash ./scripts/get_version.sh -c).txt)" > notes'
-        env:
-          app_hash: ${{ needs.build_app.outputs.hash }}
-          server_hash: ${{ needs.build_server.outputs.hash }}
-      - name: Create Github Release
-        run: |
-          version=$(bash ./scripts/get_version.sh -n)
-          gh release create "v$version" -d -F notes -t "v$version" release_bin/*/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

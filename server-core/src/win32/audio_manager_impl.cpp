@@ -137,47 +137,37 @@ void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> netwo
         timer.expires_at(timer.expiry() + duration);
         timer.wait(ec);
         if (ec) {
-            spdlog::error("Timer error: {}", ec.message());
             break;
         }
 
         UINT32 next_packet_size = 0;
         hr = pCaptureClient->GetNextPacketSize(&next_packet_size);
-        if (FAILED(hr)) {
-            spdlog::error("Failed to get next packet size: {}", _com_error(hr).ErrorMessage());
-            break;
-        }
+        exit_on_failed(hr, "pCaptureClient->GetNextPacketSize");
 
         if (next_packet_size == 0) {
             continue;
         }
 
-        BYTE* pData = nullptr;
-        UINT32 numFramesAvailable = 0;
-        DWORD dwFlags = 0;
+        BYTE* pData {};
+        UINT32 numFramesAvailable {};
+        DWORD dwFlags {};
 
-        hr = pCaptureClient->GetBuffer(&pData, &numFramesAvailable, &dwFlags, nullptr, nullptr);
-        if (FAILED(hr)) {
-            spdlog::error("Failed to get buffer: {}", _com_error(hr).ErrorMessage());
-            break;
-        }
+        hr = pCaptureClient->GetBuffer(&pData, &numFramesAvailable, &dwFlags, NULL, NULL);
+        exit_on_failed(hr, "pCaptureClient->GetBuffer");
 
         int bytes_per_frame = pCaptureFormat->nBlockAlign;
         int count = numFramesAvailable * bytes_per_frame;
 
-        network_manager->broadcast_audio_data(reinterpret_cast<const char*>(pData), count, pCaptureFormat->nBlockAlign);
+        network_manager->broadcast_audio_data((const char*)pData, count, pCaptureFormat->nBlockAlign);
 
 #ifdef DEBUG
         frame_count += numFramesAvailable;
         seconds = frame_count / pCaptureFormat->nSamplesPerSec;
-        spdlog::trace("numFramesAvailable: {}, seconds: {}", numFramesAvailable, seconds);
+        // spdlog::trace("numFramesAvailable: {}, seconds: {}", numFramesAvailable, seconds);
 #endif // DEBUG
 
         hr = pCaptureClient->ReleaseBuffer(numFramesAvailable);
-        if (FAILED(hr)) {
-            spdlog::error("Failed to release buffer: {}", _com_error(hr).ErrorMessage());
-            break;
-        }
+        exit_on_failed(hr, "pCaptureClient->ReleaseBuffer");
 
     } while (!_stoppped);
 

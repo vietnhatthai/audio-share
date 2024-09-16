@@ -183,10 +183,10 @@ void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> netwo
         hr = pCaptureClient->GetBuffer(&pData, &numFramesAvailable, &dwFlags, NULL, NULL);
         exit_on_failed(hr, "pCaptureClient->GetBuffer");
 
-        int bytes_per_frame = pCaptureFormat->nBlockAlign;
+        int bytes_per_frame = pMixFormat->nBlockAlign;
         int count = numFramesAvailable * bytes_per_frame;
 
-        network_manager->broadcast_audio_data((const char*)pData, count, pCaptureFormat->nBlockAlign);
+        network_manager->broadcast_audio_data((const char*)pData, count, pMixFormat->nBlockAlign);
 
 #ifdef DEBUG
         frame_count += numFramesAvailable;

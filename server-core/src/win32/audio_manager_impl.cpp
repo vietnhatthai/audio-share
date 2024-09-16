@@ -167,53 +167,65 @@ int audio_manager::get_endpoint_list(endpoint_list_t& endpoint_list)
 {
     HRESULT hr {};
 
-    CComPtr<IMMDeviceEnumerator> pEnumerator;
-    hr = pEnumerator.CoCreateInstance(__uuidof(MMDeviceEnumerator));
-    exit_on_failed(hr);
+    // Enumerate both render (playback) and capture (recording) devices
+    EDataFlow data_flows[] = { eRender, eCapture };  // eRender for playback, eCapture for recording
 
-    CComPtr<IMMDeviceCollection> pColletion;
-    hr = pEnumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &pColletion);
-    exit_on_failed(hr);
-
-    UINT count {};
-    hr = pColletion->GetCount(&count);
-    exit_on_failed(hr);
-
-    int default_index = -1;
-    std::string default_id = get_default_endpoint();
-
-    for (UINT i = 0; i < count; ++i) {
-        CComPtr<IMMDevice> pEndpoint;
-        hr = pColletion->Item(i, &pEndpoint);
+    // Loop through both playback and recording devices
+    for (EDataFlow data_flow : data_flows)
+    {
+        CComPtr<IMMDeviceEnumerator> pEnumerator;
+        hr = pEnumerator.CoCreateInstance(__uuidof(MMDeviceEnumerator));
         exit_on_failed(hr);
 
-        CComHeapPtr<WCHAR> pwszID;
-        hr = pEndpoint->GetId(&pwszID);
+        CComPtr<IMMDeviceCollection> pCollection;
+        hr = pEnumerator->EnumAudioEndpoints(data_flow, DEVICE_STATE_ACTIVE, &pCollection);
         exit_on_failed(hr);
 
-        CComPtr<IPropertyStore> pProps;
-        hr = pEndpoint->OpenPropertyStore(STGM_READ, &pProps);
+        UINT count {};
+        hr = pCollection->GetCount(&count);
         exit_on_failed(hr);
 
-        PROPVARIANT varName;
-        PropVariantInit(&varName);
-        hr = pProps->GetValue(PKEY_Device_FriendlyName, &varName);
-        exit_on_failed(hr);
+        int default_index = -1;
+        std::string default_id = (data_flow == eRender) ? get_default_endpoint(eRender) : get_default_endpoint(eCapture);
 
-        auto endpoint_id = wchars_to_mbs((LPWSTR)pwszID);
-        endpoint_list.push_back(std::make_pair(endpoint_id, wchars_to_mbs(varName.pwszVal)));
+        for (UINT i = 0; i < count; ++i)
+        {
+            CComPtr<IMMDevice> pEndpoint;
+            hr = pCollection->Item(i, &pEndpoint);
+            exit_on_failed(hr);
 
-        if (endpoint_id == default_id) {
-            default_index = i;
+            CComHeapPtr<WCHAR> pwszID;
+            hr = pEndpoint->GetId(&pwszID);
+            exit_on_failed(hr);
+
+            CComPtr<IPropertyStore> pProps;
+            hr = pEndpoint->OpenPropertyStore(STGM_READ, &pProps);
+            exit_on_failed(hr);
+
+            PROPVARIANT varName;
+            PropVariantInit(&varName);
+            hr = pProps->GetValue(PKEY_Device_FriendlyName, &varName);
+            exit_on_failed(hr);
+
+            std::string endpoint_id = wchars_to_mbs(pwszID);
+            std::string endpoint_name = wchars_to_mbs(varName.pwszVal);
+
+            // Add device info to endpoint_list, label them as playback or recording
+            std::string label = (data_flow == eRender) ? "[Playback]" : "[Recording]";
+            endpoint_list.push_back(std::make_pair(endpoint_id, label + " " + endpoint_name));
+
+            if (endpoint_id == default_id) {
+                default_index = i;
+            }
+
+            PropVariantClear(&varName);
         }
-
-        PropVariantClear(&varName);
     }
 
     return default_index;
 }
 
-std::string audio_manager::get_default_endpoint()
+std::string audio_manager::get_default_endpoint(EDataFlow data_flow)
 {
     HRESULT hr {};
 
@@ -222,7 +234,7 @@ std::string audio_manager::get_default_endpoint()
     exit_on_failed(hr);
 
     CComPtr<IMMDevice> pEndpoint;
-    hr = pEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &pEndpoint);
+    hr = pEnumerator->GetDefaultAudioEndpoint(data_flow, eConsole, &pEndpoint);
     if (hr == HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) {
         return {};
     }
@@ -232,7 +244,7 @@ std::string audio_manager::get_default_endpoint()
     hr = pEndpoint->GetId(&pwszID);
     exit_on_failed(hr);
 
-    return wchars_to_mbs((LPWSTR)pwszID);
+    return wchars_to_mbs(pwszID);
 }
 
 void set_format(std::shared_ptr<AudioFormat> _format, WAVEFORMATEX* format)

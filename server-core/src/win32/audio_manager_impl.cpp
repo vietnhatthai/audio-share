@@ -101,7 +101,9 @@ void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> netwo
 
         if (pClosestFormat) {
             spdlog::info("Using closest supported format.");
-            pMixFormat = pClosestFormat;
+            // Allocate memory for the format and copy the closest format into it
+            pMixFormat.AllocateBytes(pClosestFormat->cbSize);
+            std::memcpy(pMixFormat.m_pData, pClosestFormat.p, pClosestFormat->cbSize);
         } else {
             spdlog::warn("No closest format available. Trying fallback to PCM format.");
 
@@ -190,7 +192,7 @@ void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> netwo
 
 #ifdef DEBUG
         frame_count += numFramesAvailable;
-        seconds = frame_count / pCaptureFormat->nSamplesPerSec;
+        seconds = frame_count / pMixFormat->nSamplesPerSec;
         // spdlog::trace("numFramesAvailable: {}, seconds: {}", numFramesAvailable, seconds);
 #endif // DEBUG
 

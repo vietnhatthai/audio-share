@@ -93,7 +93,8 @@ void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> netwo
     spdlog::info("WAVEFORMATEX: wFormatTag: {}, nBlockAlign: {}", pMixFormat->wFormatTag, pMixFormat->nBlockAlign);
 
     // Now, check if the format is supported by the device
-    CComHeapPtr<WAVEFORMATEX> pClosestFormat = nullptr;
+    CComHeapPtr<WAVEFORMATEX> pClosestFormat;
+    pClosestFormat.AllocateBytes(sizeof(WAVEFORMATEX));
     hr = pAudioClient->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED, pMixFormat, &pClosestFormat);
 
     if (FAILED(hr)) {
@@ -103,7 +104,7 @@ void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> netwo
             spdlog::info("Using closest supported format.");
             // Allocate memory for the format and copy the closest format into it
             pMixFormat.AllocateBytes(pClosestFormat->cbSize);
-            std::memcpy(pMixFormat.m_pData, pClosestFormat.p, pClosestFormat->cbSize);
+            std::memcpy(pMixFormat.m_pData, pClosestFormat.m_pData, pClosestFormat->cbSize);
         } else {
             spdlog::warn("No closest format available. Trying fallback to PCM format.");
 

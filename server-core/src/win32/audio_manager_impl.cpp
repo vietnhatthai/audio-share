@@ -85,54 +85,55 @@ void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> netwo
     exit_on_failed(hr, "Failed to activate IAudioClient");
 
     // Try getting the mix format
-    CComHeapPtr<WAVEFORMATEX> pCaptureFormat;
-    hr = pAudioClient->GetMixFormat(&pCaptureFormat);
+    CComHeapPtr<WAVEFORMATEX> pMixFormat;
+    hr = pAudioClient->GetMixFormat(&pMixFormat);
     exit_on_failed(hr, "Failed to get mix format");
 
     // Log the format details
-    spdlog::info("WAVEFORMATEX: wFormatTag: {}, nBlockAlign: {}", pCaptureFormat->wFormatTag, pCaptureFormat->nBlockAlign);
+    spdlog::info("WAVEFORMATEX: wFormatTag: {}, nBlockAlign: {}", pMixFormat->wFormatTag, pMixFormat->nBlockAlign);
 
-    // Handle WAVE_FORMAT_EXTENSIBLE
-    if (pCaptureFormat->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
-        WAVEFORMATEXTENSIBLE* pExtensibleFormat = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(pCaptureFormat.m_pData);
-        if (pExtensibleFormat->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) {
-            pCaptureFormat->wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
+    // Now, check if the format is supported by the device
+    CComPtr<WAVEFORMATEX> pClosestFormat = nullptr;
+    hr = pAudioClient->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED, pMixFormat, &pClosestFormat);
+
+    if (FAILED(hr)) {
+        spdlog::warn("Requested format not supported. Checking closest format or falling back.");
+
+        if (pClosestFormat) {
+            spdlog::info("Using closest supported format.");
+            pMixFormat = pClosestFormat;
+        } else {
+            spdlog::warn("No closest format available. Trying fallback to PCM format.");
+
+            // Fallback to PCM format
+            CComHeapPtr<WAVEFORMATEX> pPcmFormat;
+            pPcmFormat.AllocateBytes(sizeof(WAVEFORMATEX));
+            pPcmFormat->wFormatTag = WAVE_FORMAT_PCM;
+            pPcmFormat->nChannels = 2;
+            pPcmFormat->nSamplesPerSec = 44100; // Trying a lower sample rate for compatibility
+            pPcmFormat->wBitsPerSample = 16;   // Try 16-bit PCM
+            pPcmFormat->nBlockAlign = (pPcmFormat->nChannels * pPcmFormat->wBitsPerSample) / 8;
+            pPcmFormat->nAvgBytesPerSec = pPcmFormat->nSamplesPerSec * pPcmFormat->nBlockAlign;
+            pPcmFormat->cbSize = 0;
+
+            hr = pAudioClient->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED, pPcmFormat, nullptr);
+            exit_on_failed(hr, "Fallback to PCM format failed");
+            pMixFormat = pPcmFormat;
         }
     }
-
-    // Attempt to use WAVE_FORMAT_PCM if the device does not accept float format
-    CComHeapPtr<WAVEFORMATEX> pPcmFormat;
-    hr = pAudioClient->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED, pCaptureFormat, nullptr);
-    if (FAILED(hr)) {
-        spdlog::warn("Requested format not supported, falling back to WAVE_FORMAT_PCM");
-        pPcmFormat.AllocateBytes(sizeof(WAVEFORMATEX));
-        pPcmFormat->wFormatTag = WAVE_FORMAT_PCM;
-        pPcmFormat->nChannels = 2;
-        pPcmFormat->nSamplesPerSec = 48000;
-        pPcmFormat->wBitsPerSample = 16;
-        pPcmFormat->nBlockAlign = (pPcmFormat->nChannels * pPcmFormat->wBitsPerSample) / 8;
-        pPcmFormat->nAvgBytesPerSec = pPcmFormat->nSamplesPerSec * pPcmFormat->nBlockAlign;
-        pPcmFormat->cbSize = 0;
-
-        hr = pAudioClient->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED, pPcmFormat, nullptr);
-        exit_on_failed(hr, "Fallback to PCM format failed");
-    }
-
-    // Use the PCM format if supported
-    WAVEFORMATEX* formatToUse = FAILED(hr) ? pCaptureFormat.m_pData : pPcmFormat.m_pData;
 
     // Set buffer duration
     constexpr static int REFTIMES_PER_SEC = 10000000; // 1 reference_time = 100ns
     constexpr static int REFTIMES_PER_MILLISEC = 10000;
-    REFERENCE_TIME hnsRequestedDuration = 2 * REFTIMES_PER_SEC;  // Set a smaller buffer duration
+    REFERENCE_TIME hnsRequestedDuration = 2 * REFTIMES_PER_SEC;  // 2 seconds buffer duration
 
-    // Try initializing with loopback mode
-    hr = pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, hnsRequestedDuration, 0, formatToUse, nullptr);
+    // Try initializing the audio client with the selected format
+    hr = pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, hnsRequestedDuration, 0, pMixFormat, nullptr);
     if (FAILED(hr)) {
         spdlog::warn("Loopback initialization failed, trying EVENTCALLBACK flag");
 
-        // Try initializing with EVENTCALLBACK
-        hr = pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, hnsRequestedDuration, 0, formatToUse, nullptr);
+        // Try with EVENTCALLBACK flag
+        hr = pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, hnsRequestedDuration, 0, pMixFormat, nullptr);
         exit_on_failed(hr, "Failed to initialize audio client for loopback with EVENTCALLBACK");
     }
 

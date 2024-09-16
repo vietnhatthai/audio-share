@@ -93,7 +93,7 @@ void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> netwo
     spdlog::info("WAVEFORMATEX: wFormatTag: {}, nBlockAlign: {}", pMixFormat->wFormatTag, pMixFormat->nBlockAlign);
 
     // Now, check if the format is supported by the device
-    CComPtr<WAVEFORMATEX> pClosestFormat = nullptr;
+    CComHeapPtr<WAVEFORMATEX> pClosestFormat = nullptr;
     hr = pAudioClient->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED, pMixFormat, &pClosestFormat);
 
     if (FAILED(hr)) {

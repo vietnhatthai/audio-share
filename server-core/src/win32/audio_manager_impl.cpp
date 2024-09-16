@@ -55,6 +55,15 @@ audio_manager_impl::~audio_manager_impl()
 
 } // namespace detail
 
+void exit_on_failed(HRESULT hr, const std::string& message = "") {
+    if (FAILED(hr)) {
+        _com_error err(hr);
+        std::string full_message = message.empty() ? "" : message + ": ";
+        spdlog::error("{}{}", full_message, err.ErrorMessage());
+        exit(1);
+    }
+}
+
 void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> network_manager, const std::string& endpoint_id)
 {
     spdlog::info("endpoint_id: {}", endpoint_id);
@@ -63,28 +72,38 @@ void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> netwo
 
     CComPtr<IMMDeviceEnumerator> pEnumerator;
     hr = pEnumerator.CoCreateInstance(__uuidof(MMDeviceEnumerator));
-    exit_on_failed(hr);
+    exit_on_failed(hr, "Failed to create IMMDeviceEnumerator");
 
     CComPtr<IMMDevice> pEndpoint;
     hr = pEnumerator->GetDevice(mbs_to_wchars(endpoint_id).c_str(), &pEndpoint);
-    exit_on_failed(hr);
+    exit_on_failed(hr, "Failed to get audio endpoint device");
 
     CComPtr<IPropertyStore> pProps;
     hr = pEndpoint->OpenPropertyStore(STGM_READ, &pProps);
-    exit_on_failed(hr);
+    exit_on_failed(hr, "Failed to open property store");
+    
     PROPVARIANT varName;
     PropVariantInit(&varName);
     hr = pProps->GetValue(PKEY_Device_FriendlyName, &varName);
-    exit_on_failed(hr);
-    spdlog::info("select audio endpoint: {}", wchars_to_utf8(varName.pwszVal));
+    exit_on_failed(hr, "Failed to get device friendly name");
+    spdlog::info("Selected audio endpoint: {}", wchars_to_utf8(varName.pwszVal));
     PropVariantClear(&varName);
 
     CComPtr<IAudioClient> pAudioClient;
     hr = pEndpoint->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, (void**)&pAudioClient);
-    exit_on_failed(hr);
+    exit_on_failed(hr, "Failed to activate IAudioClient");
 
     CComHeapPtr<WAVEFORMATEX> pCaptureFormat;
-    pAudioClient->GetMixFormat(&pCaptureFormat);
+    hr = pAudioClient->GetMixFormat(&pCaptureFormat);
+    exit_on_failed(hr, "Failed to get mix format");
+
+    // Log detailed audio format information
+    spdlog::info("WAVEFORMATEX: wFormatTag: {}, nBlockAlign: {}", pCaptureFormat->wFormatTag, pCaptureFormat->nBlockAlign);
+    spdlog::info("AudioFormat: format_tag: {}, channels: {}, sample_rate: {}, bits_per_sample: {}",
+                 pCaptureFormat->wFormatTag,
+                 pCaptureFormat->nChannels,
+                 pCaptureFormat->nSamplesPerSec,
+                 pCaptureFormat->wBitsPerSample);
 
     set_format(_format, pCaptureFormat);
 
@@ -92,31 +111,30 @@ void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> netwo
     constexpr static int REFTIMES_PER_MILLISEC = 10000;
 
     REFERENCE_TIME hnsMinimumDevicePeriod = 0;
-    hr = pAudioClient->GetDevicePeriod(NULL, &hnsMinimumDevicePeriod);
-    exit_on_failed(hr);
+    hr = pAudioClient->GetDevicePeriod(nullptr, &hnsMinimumDevicePeriod);
+    exit_on_failed(hr, "Failed to get device period");
 
-    REFERENCE_TIME hnsRequestedDuration = 10 * REFTIMES_PER_SEC;
+    REFERENCE_TIME hnsRequestedDuration = 10 * REFTIMES_PER_SEC;  // Requesting 10 seconds of buffer duration
     hr = pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, hnsRequestedDuration, 0, pCaptureFormat, nullptr);
-    exit_on_failed(hr);
+    exit_on_failed(hr, "Failed to initialize audio client for loopback");
 
-    UINT32 bufferFrameCount {};
+    UINT32 bufferFrameCount = 0;
     hr = pAudioClient->GetBufferSize(&bufferFrameCount);
-    exit_on_failed(hr);
-
-    spdlog::info("buffer size: {}", bufferFrameCount);
+    exit_on_failed(hr, "Failed to get buffer size");
+    spdlog::info("Buffer size: {}", bufferFrameCount);
 
     CComPtr<IAudioCaptureClient> pCaptureClient;
     hr = pAudioClient->GetService(__uuidof(IAudioCaptureClient), (void**)&pCaptureClient);
-    exit_on_failed(hr);
+    exit_on_failed(hr, "Failed to get IAudioCaptureClient");
 
     hr = pAudioClient->Start();
-    exit_on_failed(hr);
+    exit_on_failed(hr, "Failed to start audio client");
 
     const std::chrono::milliseconds duration { hnsMinimumDevicePeriod / REFTIMES_PER_MILLISEC };
-    spdlog::info("device period: {}ms", duration.count());
+    spdlog::info("Device period: {}ms", duration.count());
 
     UINT32 frame_count = 0;
-    int seconds {};
+    int seconds = 0;
 
     using namespace std::chrono_literals;
     asio::steady_timer timer(*network_manager->_ioc);
@@ -128,39 +146,52 @@ void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> netwo
         timer.expires_at(timer.expiry() + duration);
         timer.wait(ec);
         if (ec) {
+            spdlog::error("Timer error: {}", ec.message());
             break;
         }
 
         UINT32 next_packet_size = 0;
         hr = pCaptureClient->GetNextPacketSize(&next_packet_size);
-        exit_on_failed(hr, "pCaptureClient->GetNextPacketSize");
+        if (FAILED(hr)) {
+            spdlog::error("Failed to get next packet size: {}", _com_error(hr).ErrorMessage());
+            break;
+        }
 
         if (next_packet_size == 0) {
             continue;
         }
 
-        BYTE* pData {};
-        UINT32 numFramesAvailable {};
-        DWORD dwFlags {};
+        BYTE* pData = nullptr;
+        UINT32 numFramesAvailable = 0;
+        DWORD dwFlags = 0;
 
-        hr = pCaptureClient->GetBuffer(&pData, &numFramesAvailable, &dwFlags, NULL, NULL);
-        exit_on_failed(hr, "pCaptureClient->GetBuffer");
+        hr = pCaptureClient->GetBuffer(&pData, &numFramesAvailable, &dwFlags, nullptr, nullptr);
+        if (FAILED(hr)) {
+            spdlog::error("Failed to get buffer: {}", _com_error(hr).ErrorMessage());
+            break;
+        }
 
         int bytes_per_frame = pCaptureFormat->nBlockAlign;
         int count = numFramesAvailable * bytes_per_frame;
 
-        network_manager->broadcast_audio_data((const char*)pData, count, pCaptureFormat->nBlockAlign);
+        network_manager->broadcast_audio_data(reinterpret_cast<const char*>(pData), count, pCaptureFormat->nBlockAlign);
 
 #ifdef DEBUG
         frame_count += numFramesAvailable;
         seconds = frame_count / pCaptureFormat->nSamplesPerSec;
-        // spdlog::trace("numFramesAvailable: {}, seconds: {}", numFramesAvailable, seconds);
+        spdlog::trace("numFramesAvailable: {}, seconds: {}", numFramesAvailable, seconds);
 #endif // DEBUG
 
         hr = pCaptureClient->ReleaseBuffer(numFramesAvailable);
-        exit_on_failed(hr, "pCaptureClient->ReleaseBuffer");
+        if (FAILED(hr)) {
+            spdlog::error("Failed to release buffer: {}", _com_error(hr).ErrorMessage());
+            break;
+        }
 
     } while (!_stoppped);
+
+    // Stop the audio client after the loop ends
+    pAudioClient->Stop();
 }
 
 int audio_manager::get_endpoint_list(endpoint_list_t& endpoint_list)

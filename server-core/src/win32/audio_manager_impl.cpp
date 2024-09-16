@@ -225,7 +225,7 @@ int audio_manager::get_endpoint_list(endpoint_list_t& endpoint_list)
     return default_index;
 }
 
-std::string audio_manager::get_default_endpoint(EDataFlow data_flow)
+std::string audio_manager::get_default_endpoint()
 {
     HRESULT hr {};
 
@@ -234,7 +234,7 @@ std::string audio_manager::get_default_endpoint(EDataFlow data_flow)
     exit_on_failed(hr);
 
     CComPtr<IMMDevice> pEndpoint;
-    hr = pEnumerator->GetDefaultAudioEndpoint(data_flow, eConsole, &pEndpoint);
+    hr = pEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &pEndpoint);
     if (hr == HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) {
         return {};
     }
@@ -244,7 +244,7 @@ std::string audio_manager::get_default_endpoint(EDataFlow data_flow)
     hr = pEndpoint->GetId(&pwszID);
     exit_on_failed(hr);
 
-    return wchars_to_mbs(pwszID);
+    return wchars_to_mbs((LPWSTR)pwszID);
 }
 
 void set_format(std::shared_ptr<AudioFormat> _format, WAVEFORMATEX* format)

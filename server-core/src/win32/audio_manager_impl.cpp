@@ -169,6 +169,8 @@ int audio_manager::get_endpoint_list(endpoint_list_t& endpoint_list)
 
     // Enumerate both render (playback) and capture (recording) devices
     EDataFlow data_flows[] = { eRender, eCapture };  // eRender for playback, eCapture for recording
+    int default_index = -1;
+    std::string default_id = get_default_endpoint();
 
     // Loop through both playback and recording devices
     for (EDataFlow data_flow : data_flows)
@@ -185,8 +187,8 @@ int audio_manager::get_endpoint_list(endpoint_list_t& endpoint_list)
         hr = pCollection->GetCount(&count);
         exit_on_failed(hr);
 
-        int default_index = -1;
-        std::string default_id = get_default_endpoint();
+        default_index = -1;
+        default_id = get_default_endpoint();
 
         for (UINT i = 0; i < count; ++i)
         {
@@ -207,7 +209,7 @@ int audio_manager::get_endpoint_list(endpoint_list_t& endpoint_list)
             hr = pProps->GetValue(PKEY_Device_FriendlyName, &varName);
             exit_on_failed(hr);
 
-            std::string endpoint_id = wchars_to_mbs(pwszID);
+            std::string endpoint_id = wchars_to_mbs((LPWSTR)pwszID);
             std::string endpoint_name = wchars_to_mbs(varName.pwszVal);
 
             // Add device info to endpoint_list, label them as playback or recording

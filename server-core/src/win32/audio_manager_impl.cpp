@@ -186,7 +186,7 @@ int audio_manager::get_endpoint_list(endpoint_list_t& endpoint_list)
         exit_on_failed(hr);
 
         int default_index = -1;
-        std::string default_id = (data_flow == eRender) ? get_default_endpoint(eRender) : get_default_endpoint(eCapture);
+        std::string default_id = get_default_endpoint();
 
         for (UINT i = 0; i < count; ++i)
         {

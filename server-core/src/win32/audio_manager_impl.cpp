@@ -96,6 +96,15 @@ void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> netwo
                  pCaptureFormat->nSamplesPerSec,
                  pCaptureFormat->wBitsPerSample);
 
+    // Manually adjust format if necessary
+    if (pCaptureFormat->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
+        // Force the wFormatTag to 3 (WAVE_FORMAT_IEEE_FLOAT) to match other parts of the format
+        WAVEFORMATEXTENSIBLE* pExtensibleFormat = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(pCaptureFormat.m_pData);
+        if (pExtensibleFormat->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) {
+            pCaptureFormat->wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
+        }
+    }
+
     set_format(_format, pCaptureFormat);
 
     constexpr static int REFTIMES_PER_SEC = 10000000; // 1 reference_time = 100ns
@@ -106,8 +115,15 @@ void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> netwo
     exit_on_failed(hr, "Failed to get device period");
 
     REFERENCE_TIME hnsRequestedDuration = 10 * REFTIMES_PER_SEC;  // Requesting 10 seconds of buffer duration
+
+    // Initialize for loopback mode
     hr = pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, hnsRequestedDuration, 0, pCaptureFormat, nullptr);
-    exit_on_failed(hr, "Failed to initialize audio client for loopback");
+    if (FAILED(hr)) {
+        // Additional check: try using AUDCLNT_STREAMFLAGS_EVENTCALLBACK instead of loopback, just to see if it resolves the issue
+        spdlog::warn("Loopback initialization failed, trying with EVENTCALLBACK flag");
+        hr = pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, hnsRequestedDuration, 0, pCaptureFormat, nullptr);
+        exit_on_failed(hr, "Failed to initialize audio client for loopback");
+    }
 
     UINT32 bufferFrameCount = 0;
     hr = pAudioClient->GetBufferSize(&bufferFrameCount);

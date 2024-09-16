@@ -72,7 +72,7 @@ void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> netwo
     CComPtr<IPropertyStore> pProps;
     hr = pEndpoint->OpenPropertyStore(STGM_READ, &pProps);
     exit_on_failed(hr, "Failed to open property store");
-    
+
     PROPVARIANT varName;
     PropVariantInit(&varName);
     hr = pProps->GetValue(PKEY_Device_FriendlyName, &varName);
@@ -96,9 +96,8 @@ void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> netwo
                  pCaptureFormat->nSamplesPerSec,
                  pCaptureFormat->wBitsPerSample);
 
-    // Manually adjust format if necessary
+    // Handle WAVE_FORMAT_EXTENSIBLE
     if (pCaptureFormat->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
-        // Force the wFormatTag to 3 (WAVE_FORMAT_IEEE_FLOAT) to match other parts of the format
         WAVEFORMATEXTENSIBLE* pExtensibleFormat = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(pCaptureFormat.m_pData);
         if (pExtensibleFormat->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) {
             pCaptureFormat->wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
@@ -114,13 +113,15 @@ void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> netwo
     hr = pAudioClient->GetDevicePeriod(nullptr, &hnsMinimumDevicePeriod);
     exit_on_failed(hr, "Failed to get device period");
 
-    REFERENCE_TIME hnsRequestedDuration = 10 * REFTIMES_PER_SEC;  // Requesting 10 seconds of buffer duration
+    // Adjust buffer duration (try smaller)
+    REFERENCE_TIME hnsRequestedDuration = 5 * REFTIMES_PER_SEC;  // Reduce requested duration to 5 seconds
 
-    // Initialize for loopback mode
+    // Try initializing with loopback mode
     hr = pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, hnsRequestedDuration, 0, pCaptureFormat, nullptr);
     if (FAILED(hr)) {
-        // Additional check: try using AUDCLNT_STREAMFLAGS_EVENTCALLBACK instead of loopback, just to see if it resolves the issue
         spdlog::warn("Loopback initialization failed, trying with EVENTCALLBACK flag");
+
+        // Try different flags if loopback fails
         hr = pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, hnsRequestedDuration, 0, pCaptureFormat, nullptr);
         exit_on_failed(hr, "Failed to initialize audio client for loopback");
     }

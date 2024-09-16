@@ -84,17 +84,13 @@ void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> netwo
     hr = pEndpoint->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, (void**)&pAudioClient);
     exit_on_failed(hr, "Failed to activate IAudioClient");
 
+    // Try getting the mix format
     CComHeapPtr<WAVEFORMATEX> pCaptureFormat;
     hr = pAudioClient->GetMixFormat(&pCaptureFormat);
     exit_on_failed(hr, "Failed to get mix format");
 
-    // Log detailed audio format information
+    // Log the format details
     spdlog::info("WAVEFORMATEX: wFormatTag: {}, nBlockAlign: {}", pCaptureFormat->wFormatTag, pCaptureFormat->nBlockAlign);
-    spdlog::info("AudioFormat: format_tag: {}, channels: {}, sample_rate: {}, bits_per_sample: {}",
-                 pCaptureFormat->wFormatTag,
-                 pCaptureFormat->nChannels,
-                 pCaptureFormat->nSamplesPerSec,
-                 pCaptureFormat->wBitsPerSample);
 
     // Handle WAVE_FORMAT_EXTENSIBLE
     if (pCaptureFormat->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
@@ -104,26 +100,40 @@ void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> netwo
         }
     }
 
-    set_format(_format, pCaptureFormat);
+    // Attempt to use WAVE_FORMAT_PCM if the device does not accept float format
+    CComHeapPtr<WAVEFORMATEX> pPcmFormat;
+    hr = pAudioClient->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED, pCaptureFormat, nullptr);
+    if (FAILED(hr)) {
+        spdlog::warn("Requested format not supported, falling back to WAVE_FORMAT_PCM");
+        pPcmFormat.AllocateBytes(sizeof(WAVEFORMATEX));
+        pPcmFormat->wFormatTag = WAVE_FORMAT_PCM;
+        pPcmFormat->nChannels = 2;
+        pPcmFormat->nSamplesPerSec = 48000;
+        pPcmFormat->wBitsPerSample = 16;
+        pPcmFormat->nBlockAlign = (pPcmFormat->nChannels * pPcmFormat->wBitsPerSample) / 8;
+        pPcmFormat->nAvgBytesPerSec = pPcmFormat->nSamplesPerSec * pPcmFormat->nBlockAlign;
+        pPcmFormat->cbSize = 0;
 
+        hr = pAudioClient->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED, pPcmFormat, nullptr);
+        exit_on_failed(hr, "Fallback to PCM format failed");
+    }
+
+    // Use the PCM format if supported
+    WAVEFORMATEX* formatToUse = FAILED(hr) ? pCaptureFormat.m_pData : pPcmFormat.m_pData;
+
+    // Set buffer duration
     constexpr static int REFTIMES_PER_SEC = 10000000; // 1 reference_time = 100ns
     constexpr static int REFTIMES_PER_MILLISEC = 10000;
-
-    REFERENCE_TIME hnsMinimumDevicePeriod = 0;
-    hr = pAudioClient->GetDevicePeriod(nullptr, &hnsMinimumDevicePeriod);
-    exit_on_failed(hr, "Failed to get device period");
-
-    // Adjust buffer duration (try smaller)
-    REFERENCE_TIME hnsRequestedDuration = 5 * REFTIMES_PER_SEC;  // Reduce requested duration to 5 seconds
+    REFERENCE_TIME hnsRequestedDuration = 2 * REFTIMES_PER_SEC;  // Set a smaller buffer duration
 
     // Try initializing with loopback mode
-    hr = pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, hnsRequestedDuration, 0, pCaptureFormat, nullptr);
+    hr = pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, hnsRequestedDuration, 0, formatToUse, nullptr);
     if (FAILED(hr)) {
-        spdlog::warn("Loopback initialization failed, trying with EVENTCALLBACK flag");
+        spdlog::warn("Loopback initialization failed, trying EVENTCALLBACK flag");
 
-        // Try different flags if loopback fails
-        hr = pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, hnsRequestedDuration, 0, pCaptureFormat, nullptr);
-        exit_on_failed(hr, "Failed to initialize audio client for loopback");
+        // Try initializing with EVENTCALLBACK
+        hr = pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, hnsRequestedDuration, 0, formatToUse, nullptr);
+        exit_on_failed(hr, "Failed to initialize audio client for loopback with EVENTCALLBACK");
     }
 
     UINT32 bufferFrameCount = 0;
@@ -138,7 +148,7 @@ void audio_manager::do_loopback_recording(std::shared_ptr<network_manager> netwo
     hr = pAudioClient->Start();
     exit_on_failed(hr, "Failed to start audio client");
 
-    const std::chrono::milliseconds duration { hnsMinimumDevicePeriod / REFTIMES_PER_MILLISEC };
+    const std::chrono::milliseconds duration { hnsRequestedDuration / REFTIMES_PER_MILLISEC };
     spdlog::info("Device period: {}ms", duration.count());
 
     UINT32 frame_count = 0;
